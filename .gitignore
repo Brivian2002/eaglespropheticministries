@@ -1,0 +1,60 @@
+# Dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# Environment files
+.env*
+!.env.example
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Project-specific (not part of deployment)
+/db/
+/prisma/
+/upload/
+/tool-results/
+/mini-services/
+/tests/
+/examples/
+/screenshot*
+/verify-*.png
+/final-*.png
+/prophet-page*.png
+/book-section.png
+/BUILD_PROMPT.md
+/worklog.md
+local-*
+.claude
+.z-ai-config
