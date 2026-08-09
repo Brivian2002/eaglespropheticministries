@@ -26,7 +26,7 @@ export const PRODUCTS: ProductConfig[] = [
     slug: "the-endtimes-prophetic-guide",
     description:
       "A prophetic and teaching material by Prophet Gabriel Christ Alorgo that emphasizes understanding the endtimes prophecies of the Bible. Contains useful guidelines for understanding the Bible in a more prophetic and accurate way through the revelations of the Spirit and backed by scriptures.",
-    price: 15000, // GHS 150.00
+    price: 16000, // GHS 160.00
     currency: "GHS",
     coverImage: "/images/EPMBook.jpg",
     category: "book",
