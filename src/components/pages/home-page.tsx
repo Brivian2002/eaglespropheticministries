@@ -822,7 +822,7 @@ export function HomePage() {
                     {/* Price */}
                     <div className="mb-6">
                       <span className="text-2xl md:text-3xl font-bold text-gold">
-                        {formatPrice(15000)}
+                        {formatPrice(16000)}
                       </span>
                     </div>
 
