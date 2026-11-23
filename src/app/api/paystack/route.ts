@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProductById, isProductDeliveryReady } from "@/lib/product-config";
 import { ensureDownloadTicketSchema } from "@/lib/download-ticket-store";
 import { getSafeDatabaseErrorSummary } from "@/lib/safe-database-error";
+import { isPreviewDeployment, isStagingVerificationBuild } from "@/lib/staging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,12 @@ interface PaystackInitPayload {
 
 export async function POST(request: NextRequest) {
   try {
+    if (isStagingVerificationBuild() || isPreviewDeployment()) {
+      return NextResponse.json(
+        { error: "Checkout is disabled on staging and preview deployments. No payment was started." },
+        { status: 503 },
+      );
+    }
     const body = (await request.json()) as PaystackInitPayload;
     const email = body.email?.trim();
     if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {

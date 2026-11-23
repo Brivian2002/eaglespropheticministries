@@ -1,5 +1,7 @@
 import "server-only";
 
+import { isStagingVerificationBuild } from "@/lib/staging";
+
 /**
  * Server-only catalog for local Paystack sales. File IDs must never be exposed
  * to the browser or returned from the products API.
@@ -62,7 +64,11 @@ export function getProductById(id: string): ProductConfig | undefined {
 /** Fails closed unless every paid item has its private file and is approved for sale. */
 export function isProductDeliveryReady(product: ProductConfig): boolean {
   if (!product.googleDriveFileId) return false;
-  if (product.category === "android-app-bundle" && process.env.EPM_ANDROID_APP_RELEASE_READY !== "true") {
+  if (
+    product.category === "android-app-bundle" &&
+    process.env.EPM_ANDROID_APP_RELEASE_READY !== "true" &&
+    !isStagingVerificationBuild()
+  ) {
     return false;
   }
   return true;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getActiveProducts, isProductDeliveryReady } from "@/lib/product-config";
 import { issueDownloadTicket } from "@/lib/download-ticket-store";
 import { verifyPaystackProductPurchase } from "@/lib/paystack-verification";
+import { isPreviewDeployment, isStagingVerificationBuild } from "@/lib/staging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,12 @@ function noStoreHeaders() {
 }
 
 export async function GET(request: NextRequest) {
+  if (isStagingVerificationBuild() || isPreviewDeployment()) {
+    return NextResponse.json(
+      { error: "Live payment verification is disabled on staging and preview deployments." },
+      { status: 503, headers: noStoreHeaders() },
+    );
+  }
   const reference = request.nextUrl.searchParams.get("reference")?.trim();
   if (!reference || reference.length > 128 || !/^[A-Za-z0-9_-]+$/.test(reference)) {
     return NextResponse.json(

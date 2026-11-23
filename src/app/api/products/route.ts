@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { getActiveProducts, isProductDeliveryReady } from "@/lib/product-config";
+import { isPreviewDeployment, isStagingVerificationBuild } from "@/lib/staging";
 
 export const dynamic = "force-dynamic";
 
 /** Public storefront catalogue; server file identifiers are deliberately omitted. */
 export async function GET() {
+  const checkoutDisabled = isStagingVerificationBuild() || isPreviewDeployment();
   const products = getActiveProducts().map((product) => ({
     id: product.id,
     title: product.title,
@@ -17,7 +19,7 @@ export async function GET() {
     contents: product.contents,
     fulfillmentNote: product.fulfillmentNote,
     releaseReady: product.category !== "android-app-bundle" || process.env.EPM_ANDROID_APP_RELEASE_READY === "true",
-    purchasable: Boolean(
+    purchasable: !checkoutDisabled && Boolean(
       isProductDeliveryReady(product) &&
       process.env.DATABASE_URL &&
       process.env.PAYSTACK_SECRET_KEY,

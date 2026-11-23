@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 const mocks = vi.hoisted(() => ({
   getProductById: vi.fn(),
   isProductDeliveryReady: vi.fn(),
+  getDownloadTicketProductId: vi.fn(),
   claimDownloadTicket: vi.fn(),
   markDownloadTicketConsumed: vi.fn(),
   releaseDownloadTicket: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/product-config", () => ({
   isProductDeliveryReady: mocks.isProductDeliveryReady,
 }));
 vi.mock("@/lib/download-ticket-store", () => ({
+  getDownloadTicketProductId: mocks.getDownloadTicketProductId,
   claimDownloadTicket: mocks.claimDownloadTicket,
   markDownloadTicketConsumed: mocks.markDownloadTicketConsumed,
   releaseDownloadTicket: mocks.releaseDownloadTicket,
@@ -57,7 +59,8 @@ describe("GET /api/download/stream", () => {
     vi.clearAllMocks();
     mocks.isValidDownloadToken.mockReturnValue(true);
     mocks.hashDownloadToken.mockReturnValue("hashed-ticket");
-    mocks.claimDownloadTicket.mockResolvedValue({ productId: product.id });
+    mocks.getDownloadTicketProductId.mockResolvedValue(product.id);
+    mocks.claimDownloadTicket.mockResolvedValue({ productId: product.id, leaseId: "lease-1" });
     mocks.getProductById.mockReturnValue(product);
     mocks.isProductDeliveryReady.mockReturnValue(true);
     mocks.getGoogleDriveFileSize.mockResolvedValue(1024);
@@ -79,7 +82,9 @@ describe("GET /api/download/stream", () => {
     expect(response.headers.get("content-range")).toBe("bytes 5-9/1024");
     expect(response.headers.get("content-length")).toBe("5");
     expect(await response.text()).toBe("chunk");
+    expect(mocks.claimDownloadTicket).toHaveBeenCalledWith("hashed-ticket", 5, 9, 1024);
     expect(mocks.openGoogleDriveMediaStream).toHaveBeenCalledWith("private-drive-id", "bytes=5-9");
+    expect(mocks.releaseDownloadTicket).toHaveBeenCalledWith("hashed-ticket", "lease-1", 10);
     expect(mocks.markDownloadTicketConsumed).not.toHaveBeenCalled();
   });
 
@@ -88,7 +93,7 @@ describe("GET /api/download/stream", () => {
     const response = await GET(makeRequest("bytes=1020-1023"));
     expect(response.status).toBe(206);
     expect(await response.text()).toBe("last");
-    expect(mocks.markDownloadTicketConsumed).toHaveBeenCalledWith("hashed-ticket");
+    expect(mocks.markDownloadTicketConsumed).toHaveBeenCalledWith("hashed-ticket", "lease-1", 1024);
   });
 
   it("rejects an unsatisfiable range without opening the private file", async () => {
@@ -97,6 +102,25 @@ describe("GET /api/download/stream", () => {
     expect(response.status).toBe(416);
     expect(response.headers.get("content-range")).toBe("bytes */1024");
     expect(mocks.openGoogleDriveMediaStream).not.toHaveBeenCalled();
-    expect(mocks.releaseDownloadTicket).toHaveBeenCalledWith("hashed-ticket");
+    expect(mocks.claimDownloadTicket).not.toHaveBeenCalled();
+    expect(mocks.releaseDownloadTicket).not.toHaveBeenCalled();
+  });
+
+  it("rejects a parallel claim before opening the file", async () => {
+    mocks.parseByteRange.mockReturnValueOnce({ kind: "range", start: 0, end: 10 });
+    mocks.claimDownloadTicket.mockResolvedValueOnce(null);
+    const response = await GET(makeRequest("bytes=0-10"));
+    expect(response.status).toBe(409);
+    expect(mocks.openGoogleDriveMediaStream).not.toHaveBeenCalled();
+  });
+
+  it("persists the next sequential offset when a client resumes after cancellation", async () => {
+    mocks.parseByteRange.mockReturnValueOnce({ kind: "range", start: 20, end: 29 });
+    const response = await GET(makeRequest("bytes=20-29"));
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    await reader!.read();
+    await reader!.cancel();
+    expect(mocks.releaseDownloadTicket).toHaveBeenCalledWith("hashed-ticket", "lease-1", 25);
   });
 });
