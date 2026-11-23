@@ -42,6 +42,7 @@ interface Product {
   category: string;
   contents: string[];
   fulfillmentNote?: string;
+  releaseReady?: boolean;
   purchasable: boolean;
 }
 
@@ -68,7 +69,8 @@ const FALLBACK_PRODUCTS: Product[] = [
     coverImage: "/images/EPMBook.jpg",
     category: "android-app-bundle",
     contents: ["Android app", "Complete book PDF inside the app", "Audiobook inside the app"],
-    fulfillmentNote: "Debug-signed review build, not production-signed. Approximately 1.06 GB.",
+    fulfillmentNote: "Customer release pending: the current APK is debug-signed for review and is not available for purchase. Approximately 1.06 GB.",
+    releaseReady: false,
     purchasable: false,
   },
 ];
@@ -269,19 +271,14 @@ export function BookStorePage() {
       document.body.appendChild(frame);
     }
     const form = document.createElement("form");
-    form.method = "POST";
+    form.method = "GET";
     form.action = "/api/download/stream";
     form.target = frame.name;
     form.style.display = "none";
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = "ticket";
-    input.value = ticket;
-    form.appendChild(input);
     document.body.appendChild(form);
     form.submit();
     form.remove();
-    setFulfillmentMessage("The server is securely streaming your file. Keep this page open while the download runs.");
+    setFulfillmentMessage("The secure download is starting. If your connection drops, use the browser’s resume control or try Download again while this authorization is valid.");
     setFulfillment("downloading");
   };
 
@@ -362,7 +359,7 @@ export function BookStorePage() {
             </div>
             <div>
               <h2 className="font-[var(--font-playfair)] text-xl font-bold text-foreground">The Endtimes Prophetic Guide</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Two local digital options. Prices are in Ghana cedis.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Four ways to get the book, together in one place. Local prices are in Ghana cedis.</p>
             </div>
           </div>
 
@@ -376,63 +373,103 @@ export function BookStorePage() {
             </div>
           )}
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {products.map((product) => {
               const isApp = product.category === "android-app-bundle";
               return (
-                <Card key={product.id} className="overflow-hidden rounded-2xl border-border transition-shadow hover:shadow-lg">
-                  <div className="grid sm:grid-cols-[180px_1fr]">
-                    <div className="relative min-h-56 bg-gradient-to-br from-royal to-royal-dark sm:min-h-full">
+                <Card key={product.id} className="flex h-full flex-col overflow-hidden rounded-xl border-border shadow-sm transition-shadow hover:shadow-md">
+                  <div className="relative h-44 bg-gradient-to-br from-[#fbfaf7] to-[#eee8da] p-3">
                       <Image
                         src={product.coverImage || "/images/EPMBook.jpg"}
                         alt="Cover of The Endtimes Prophetic Guide"
                         fill
-                        sizes="(max-width: 640px) 100vw, 180px"
-                        className="object-cover"
+                        sizes="(max-width: 640px) 100vw, (max-width: 1279px) 50vw, 25vw"
+                        className="rounded-lg object-contain p-2"
                       />
+                  </div>
+                  <CardContent className="flex flex-1 flex-col p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Badge variant="secondary" className="rounded-full bg-gold/10 text-[10px] uppercase tracking-wider text-gold-dark">
+                        {isApp && !product.releaseReady ? "Review only" : isApp ? "Android bundle" : "Digital PDF"}
+                      </Badge>
+                      <span className="text-lg font-bold text-royal">{formatPrice(product.price)}</span>
                     </div>
-                    <CardContent className="flex flex-col p-5 md:p-6">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Badge variant="secondary" className="rounded-full bg-gold/10 text-[10px] uppercase tracking-wider text-gold-dark">
-                          {isApp ? "Android bundle" : "Digital PDF"}
-                        </Badge>
-                        <span className="text-xl font-bold text-royal">{formatPrice(product.price)}</span>
-                      </div>
-                      <h3 className="mt-3 font-[var(--font-playfair)] text-lg font-bold leading-snug text-foreground">{product.title}</h3>
-                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{product.description}</p>
-                      <ul className="mt-4 space-y-2 text-sm text-foreground/85">
+                    <h3 className="mt-3 font-[var(--font-playfair)] text-base font-bold leading-snug text-foreground">{product.title}</h3>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{product.description}</p>
+                    <ul className="mt-3 space-y-1.5 text-xs text-foreground/85">
                         {product.contents.map((item) => (
                           <li key={item} className="flex items-start gap-2">
                             {item.toLowerCase().includes("audio") ? <Headphones className="mt-0.5 h-4 w-4 shrink-0 text-gold" /> : isApp ? <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-gold" /> : <FileText className="mt-0.5 h-4 w-4 shrink-0 text-gold" />}
                             <span>{item}</span>
                           </li>
                         ))}
-                      </ul>
-                      {product.fulfillmentNote && (
-                        <p className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-900 dark:text-amber-100">
-                          <strong>Important:</strong> This is a debug-signed review APK, not a production-signed release. It is approximately 1.06 GB; download time may depend on your connection and the hosting limit.
-                        </p>
-                      )}
-                      <Button
-                        className="mt-5 w-full bg-gold font-semibold text-royal-dark hover:bg-gold-dark"
-                        onClick={() => { setSelectedProduct(product); setInitError(""); }}
-                        disabled={!product.purchasable}
-                        title={!product.purchasable ? "Checkout is not configured in this deployment" : undefined}
-                      >
-                        <CreditCard className="mr-2 h-4 w-4" />
-                        {product.purchasable ? "Continue to secure checkout" : "Checkout unavailable in this deployment"}
-                      </Button>
-                      {!product.purchasable && (
-                        <p className="mt-2 text-center text-xs text-muted-foreground">No payment will be started here.</p>
-                      )}
-                    </CardContent>
-                  </div>
+                    </ul>
+                    {product.fulfillmentNote && (
+                      <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 p-2.5 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
+                        <strong>Release status:</strong> {product.fulfillmentNote}
+                      </p>
+                    )}
+                    <Button
+                      className="mt-auto pt-5 w-full bg-gold font-semibold text-royal-dark hover:bg-gold-dark"
+                      onClick={() => { setSelectedProduct(product); setInitError(""); }}
+                      disabled={!product.purchasable}
+                      title={!product.purchasable ? "Checkout is not configured or the production release is pending" : undefined}
+                    >
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      {isApp && !product.releaseReady ? "Release pending" : product.purchasable ? "Continue to checkout" : "Checkout unavailable"}
+                    </Button>
+                    {!product.purchasable && (
+                      <p className="mt-2 text-center text-[11px] text-muted-foreground">
+                        {isApp && !product.releaseReady ? "Review-only; no payment will be started." : "No payment will be started here."}
+                      </p>
+                    )}
+                  </CardContent>
                 </Card>
               );
             })}
+
+            <a href={AMAZON_LISTING} target="_blank" rel="noopener noreferrer" className="group h-full rounded-xl focus:outline-none focus:ring-2 focus:ring-royal">
+              <Card className="flex h-full flex-col overflow-hidden rounded-xl border-border shadow-sm transition-shadow group-hover:shadow-md">
+                <div className="relative h-44 bg-gradient-to-br from-[#fbfaf7] to-[#eee8da] p-3">
+                  <Image src="/images/EPMBook.jpg" alt="Cover of The Endtimes Prophetic Guide" fill sizes="(max-width: 640px) 100vw, (max-width: 1279px) 50vw, 25vw" className="rounded-lg object-contain p-2" />
+                  <div className="absolute right-3 top-3 rounded-md border border-black/5 bg-white/95 px-2.5 py-1 shadow-sm">
+                    <span className="block text-sm font-bold tracking-tight text-[#111]">amazon</span>
+                    <span className="-mt-0.5 block text-[9px] font-semibold text-[#333]">Kindle edition</span>
+                  </div>
+                </div>
+                <CardContent className="flex flex-1 flex-col p-4">
+                  <Badge variant="outline" className="w-fit rounded-full border-[#f0a43b] bg-[#fff8ed] text-[10px] uppercase tracking-wider text-[#7a4b09]">Kindle edition</Badge>
+                  <h3 className="mt-3 font-[var(--font-playfair)] text-base font-bold text-foreground">Buy on Amazon</h3>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">THE ENDTIMES PROPHETIC GUIDE by Gabriel Christ Alorgo, edited by Bright Dumashie. Amazon checkout is separate from local Paystack checkout.</p>
+                  <div className="mt-auto flex items-center justify-between pt-5 text-xs font-semibold text-royal">
+                    <span>Open Amazon Kindle listing</span><ExternalLink className="h-4 w-4" />
+                  </div>
+                </CardContent>
+              </Card>
+            </a>
+
+            <a href={SELAR_LISTING} target="_blank" rel="noopener noreferrer" className="group h-full rounded-xl focus:outline-none focus:ring-2 focus:ring-royal">
+              <Card className="flex h-full flex-col overflow-hidden rounded-xl border-border shadow-sm transition-shadow group-hover:shadow-md">
+                <div className="relative h-44 bg-gradient-to-br from-[#fbfaf7] to-[#eee8da] p-3">
+                  <Image src="/images/EPMBook.jpg" alt="Cover of The Endtimes Prophetic Guide" fill sizes="(max-width: 640px) 100vw, (max-width: 1279px) 50vw, 25vw" className="rounded-lg object-contain p-2" />
+                  <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-md border border-black/5 bg-white/95 px-2 py-1 shadow-sm">
+                    <Image src="/images/selar-logo.png" alt="" width={18} height={18} className="rounded" />
+                    <span className="text-xs font-bold text-[#262626]">Selar</span>
+                  </div>
+                </div>
+                <CardContent className="flex flex-1 flex-col p-4">
+                  <Badge variant="outline" className="w-fit rounded-full border-emerald-600/25 bg-emerald-600/5 text-[10px] uppercase tracking-wider text-emerald-800">Ministry listing</Badge>
+                  <h3 className="mt-3 font-[var(--font-playfair)] text-base font-bold text-foreground">Buy on Selar</h3>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Prefer Selar? Open the existing ministry listing on Selar’s secure platform.</p>
+                  <div className="mt-auto flex items-center justify-between pt-5 text-xs font-semibold text-royal">
+                    <span>Open Selar listing</span><ExternalLink className="h-4 w-4" />
+                  </div>
+                </CardContent>
+              </Card>
+            </a>
           </div>
 
-          <div className="mt-8 grid gap-3 sm:grid-cols-3">
+          <div className="mt-6 grid gap-2 sm:grid-cols-3">
             {[
               { icon: Lock, title: "Paystack checkout", text: "The server sets the product price; checkout starts only when you choose it." },
               { icon: ShieldCheck, title: "Verified first", text: "Payment status, exact amount, currency, reference, and product are checked before download." },
@@ -444,36 +481,6 @@ export function BookStorePage() {
               </div>
             ))}
           </div>
-
-          <section className="mt-10" aria-labelledby="other-sellers">
-            <h2 id="other-sellers" className="mb-4 font-[var(--font-playfair)] text-lg font-bold text-foreground">Other ways to get the book</h2>
-            <div className="grid gap-4 md:grid-cols-2">
-              <a href={AMAZON_LISTING} target="_blank" rel="noopener noreferrer" className="group rounded-2xl focus:outline-none focus:ring-2 focus:ring-royal">
-                <Card className="h-full transition-shadow group-hover:shadow-md">
-                  <CardContent className="flex h-full items-center gap-4 p-5">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted"><BookOpen className="h-6 w-6 text-royal" /></div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-foreground">View the Kindle edition on Amazon</p>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">THE ENDTIMES PROPHETIC GUIDE by Gabriel Christ Alorgo, edited by Bright Dumashie. Amazon’s Kindle listing is separate from the local PDF and Android bundle.</p>
-                    </div>
-                    <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </CardContent>
-                </Card>
-              </a>
-              <a href={SELAR_LISTING} target="_blank" rel="noopener noreferrer" className="group rounded-2xl focus:outline-none focus:ring-2 focus:ring-royal">
-                <Card className="h-full transition-shadow group-hover:shadow-md">
-                  <CardContent className="flex h-full items-center gap-4 p-5">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted"><Image src="/images/selar-logo.png" alt="" width={28} height={28} className="rounded" /></div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-foreground">Buy on Selar</p>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Prefer Selar? Open the existing ministry listing on Selar’s secure platform.</p>
-                    </div>
-                    <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </CardContent>
-                </Card>
-              </a>
-            </div>
-          </section>
 
           <Card className="mt-8 rounded-2xl border-border">
             <CardContent className="p-5">

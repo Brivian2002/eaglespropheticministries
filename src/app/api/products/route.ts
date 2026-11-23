@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getActiveProducts } from "@/lib/product-config";
+import { getActiveProducts, isProductDeliveryReady } from "@/lib/product-config";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +16,9 @@ export async function GET() {
     category: product.category,
     contents: product.contents,
     fulfillmentNote: product.fulfillmentNote,
+    releaseReady: product.category !== "android-app-bundle" || process.env.EPM_ANDROID_APP_RELEASE_READY === "true",
     purchasable: Boolean(
-      product.googleDriveFileId &&
+      isProductDeliveryReady(product) &&
       process.env.DATABASE_URL &&
       process.env.PAYSTACK_SECRET_KEY,
     ),

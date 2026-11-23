@@ -8,7 +8,9 @@ const globals = globalThis as typeof globalThis & {
   __epmTicketSchema?: Promise<void>;
 };
 
-const TICKET_TTL_SECONDS = 10 * 60;
+const DEFAULT_TICKET_TTL_SECONDS = 10 * 60;
+const MAX_TICKET_TTL_SECONDS = 2 * 60 * 60;
+const STREAM_LEASE_SECONDS = 305;
 
 function getSql(): SqlClient {
   const url = process.env.DATABASE_URL;
@@ -60,7 +62,11 @@ export async function ensureDownloadTicketSchema(): Promise<void> {
 export async function issueDownloadTicket(
   reference: string,
   productId: string,
+  ttlSeconds = DEFAULT_TICKET_TTL_SECONDS,
 ): Promise<{ token: string; expiresAt: string } | null> {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > MAX_TICKET_TTL_SECONDS) {
+    throw new Error("Download authorization lifetime is outside the allowed range.");
+  }
   await ensureDownloadTicketSchema();
   const token = createDownloadToken();
   const tokenHash = hashDownloadToken(token);
@@ -72,13 +78,13 @@ export async function issueDownloadTicket(
     )
     VALUES (
       ${reference}, ${productId}, ${tokenHash}, 'issued', NOW(),
-      NOW() + ${TICKET_TTL_SECONDS} * INTERVAL '1 second', NULL, NULL
+      NOW() + ${ttlSeconds} * INTERVAL '1 second', NULL, NULL
     )
     ON CONFLICT (reference) DO UPDATE SET
       ticket_hash = EXCLUDED.ticket_hash,
       state = 'issued',
       issued_at = NOW(),
-      expires_at = NOW() + ${TICKET_TTL_SECONDS} * INTERVAL '1 second',
+      expires_at = NOW() + ${ttlSeconds} * INTERVAL '1 second',
       stream_started_at = NULL,
       consumed_at = NULL
     WHERE epm_download_tickets.product_id = EXCLUDED.product_id
@@ -103,8 +109,11 @@ export async function claimDownloadTicket(
     UPDATE epm_download_tickets
     SET state = 'streaming', stream_started_at = NOW()
     WHERE ticket_hash = ${tokenHash}
-      AND state = 'issued'
       AND expires_at > NOW()
+      AND (
+        state = 'issued'
+        OR state = 'streaming'
+      )
     RETURNING product_id
   `;
   return rows[0] ? { productId: rows[0].product_id } : null;
@@ -133,9 +142,10 @@ export async function getDownloadTicketState(
 ): Promise<"issued" | "streaming" | "consumed" | "expired" | null> {
   await ensureDownloadTicketSchema();
   const rows = await getSql()<
-    { state: "issued" | "streaming" | "consumed"; expires_at: Date }[]
+    { state: "issued" | "streaming" | "consumed"; expires_at: Date; stream_stale: boolean }[]
   >`
-    SELECT state, expires_at
+    SELECT state, expires_at,
+      (state = 'streaming' AND stream_started_at <= NOW() - ${STREAM_LEASE_SECONDS} * INTERVAL '1 second') AS stream_stale
     FROM epm_download_tickets
     WHERE ticket_hash = ${tokenHash}
     LIMIT 1
@@ -144,6 +154,9 @@ export async function getDownloadTicketState(
   if (!row) return null;
   if (new Date(row.expires_at).getTime() <= Date.now()) {
     return "expired";
+  }
+  if (row.state === "streaming" && row.stream_stale) {
+    return "issued";
   }
   return row.state;
 }

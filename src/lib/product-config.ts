@@ -51,12 +51,21 @@ const PRODUCTS: ProductConfig[] = [
     fileName: "EaglesPropheticMinistries-review.apk",
     contents: ["Android app", "Complete book PDF inside the app", "Audiobook inside the app"],
     fulfillmentNote:
-      "This is a debug-signed review APK, not a production-signed release. The download is approximately 1.06 GB.",
+      "Customer release pending: the current APK is debug-signed for review and is not available for purchase. Approximately 1.06 GB.",
   },
 ];
 
 export function getProductById(id: string): ProductConfig | undefined {
   return PRODUCTS.find((product) => product.id === id && product.isActive);
+}
+
+/** Fails closed unless every paid item has its private file and is approved for sale. */
+export function isProductDeliveryReady(product: ProductConfig): boolean {
+  if (!product.googleDriveFileId) return false;
+  if (product.category === "android-app-bundle" && process.env.EPM_ANDROID_APP_RELEASE_READY !== "true") {
+    return false;
+  }
+  return true;
 }
 
 export function getActiveProducts(): ProductConfig[] {

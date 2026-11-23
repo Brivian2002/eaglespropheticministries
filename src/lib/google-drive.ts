@@ -6,9 +6,11 @@ export interface DriveMediaStream {
   stream: Readable;
   contentType: string;
   contentLength?: string;
+  contentRange?: string;
+  status: number;
 }
 
-export async function openGoogleDriveMediaStream(fileId: string): Promise<DriveMediaStream> {
+function getDriveClient() {
   const projectId = process.env.GOOGLE_PROJECT_ID;
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   const rawPrivateKey = process.env.GOOGLE_PRIVATE_KEY;
@@ -24,10 +26,31 @@ export async function openGoogleDriveMediaStream(fileId: string): Promise<DriveM
     },
     scopes: ["https://www.googleapis.com/auth/drive.readonly"],
   });
-  const drive = google.drive({ version: "v3", auth });
+  return google.drive({ version: "v3", auth });
+}
+
+export async function getGoogleDriveFileSize(fileId: string): Promise<number> {
+  const drive = getDriveClient();
+  const response = await drive.files.get({
+    fileId,
+    fields: "size",
+    supportsAllDrives: true,
+  });
+  const size = Number(response.data.size);
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    throw new Error("Google Drive did not return a valid file size.");
+  }
+  return size;
+}
+
+export async function openGoogleDriveMediaStream(fileId: string, range?: string): Promise<DriveMediaStream> {
+  const drive = getDriveClient();
   const response = await drive.files.get(
     { fileId, alt: "media", supportsAllDrives: true },
-    { responseType: "stream" },
+    {
+      responseType: "stream",
+      ...(range ? { headers: { Range: range } } : {}),
+    },
   );
 
   const stream = response.data as Readable;
@@ -39,5 +62,7 @@ export async function openGoogleDriveMediaStream(fileId: string): Promise<DriveM
     stream,
     contentType: headers["content-type"] || "application/octet-stream",
     contentLength: headers["content-length"],
+    contentRange: headers["content-range"],
+    status: response.status || (range ? 206 : 200),
   };
 }

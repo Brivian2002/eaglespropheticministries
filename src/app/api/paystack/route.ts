@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProductById } from "@/lib/product-config";
+import { getProductById, isProductDeliveryReady } from "@/lib/product-config";
 import { ensureDownloadTicketSchema } from "@/lib/download-ticket-store";
 
 export const runtime = "nodejs";
@@ -48,9 +48,20 @@ export async function POST(request: NextRequest) {
           { status: 503 },
         );
       }
+      if (!isProductDeliveryReady(product)) {
+        return NextResponse.json(
+          { error: "The Android app is review-only until a production-signed release is available. No payment was started." },
+          { status: 503 },
+        );
+      }
       try {
         await ensureDownloadTicketSchema();
-      } catch {
+      } catch (error) {
+        const candidate = error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code || "")
+          : "";
+        const safeCode = /^(?:[A-Z0-9]{5}|E[A-Z0-9]{2,8})$/.test(candidate) ? candidate : "unclassified";
+        console.error("Secure fulfillment schema initialization failed.", { databaseCode: safeCode });
         return NextResponse.json(
           { error: "Secure fulfillment is not ready, so no payment was started." },
           { status: 503 },
