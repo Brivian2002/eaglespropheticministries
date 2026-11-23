@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProductById, isProductDeliveryReady } from "@/lib/product-config";
 import { ensureDownloadTicketSchema } from "@/lib/download-ticket-store";
+import { getSafeDatabaseErrorSummary } from "@/lib/safe-database-error";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,11 +58,7 @@ export async function POST(request: NextRequest) {
       try {
         await ensureDownloadTicketSchema();
       } catch (error) {
-        const candidate = error && typeof error === "object" && "code" in error
-          ? String((error as { code?: unknown }).code || "")
-          : "";
-        const safeCode = /^(?:[A-Z0-9]{5}|E[A-Z0-9]{2,8})$/.test(candidate) ? candidate : "unclassified";
-        console.error("Secure fulfillment schema initialization failed.", { databaseCode: safeCode });
+        console.error("Secure fulfillment schema initialization failed.", getSafeDatabaseErrorSummary(error));
         return NextResponse.json(
           { error: "Secure fulfillment is not ready, so no payment was started." },
           { status: 503 },

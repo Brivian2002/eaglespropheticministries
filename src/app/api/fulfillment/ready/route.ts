@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureDownloadTicketSchema } from "@/lib/download-ticket-store";
+import { getSafeDatabaseErrorSummary } from "@/lib/safe-database-error";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,11 +24,7 @@ export async function GET() {
     await ensureDownloadTicketSchema();
     return response(true, 200);
   } catch (error) {
-    const candidate = error && typeof error === "object" && "code" in error
-      ? String((error as { code?: unknown }).code || "")
-      : "";
-    const safeCode = /^(?:[A-Z0-9]{5}|E[A-Z0-9]{2,8})$/.test(candidate) ? candidate : "unclassified";
-    console.error("Fulfillment readiness schema check failed.", { databaseCode: safeCode });
+    console.error("Fulfillment readiness schema check failed.", getSafeDatabaseErrorSummary(error));
     return response(false, 503);
   }
 }
