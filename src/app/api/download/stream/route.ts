@@ -8,17 +8,24 @@ import {
   releaseDownloadTicket,
 } from "@/lib/download-ticket-store";
 import { hashDownloadToken, isValidDownloadToken } from "@/lib/download-token";
+import { getSanitizedGoogleDriveFailure } from "@/lib/google-drive-diagnostics";
 import { getGoogleDriveFileSize, openGoogleDriveMediaStream } from "@/lib/google-drive";
 import { parseByteRange } from "@/lib/byte-range";
+import { isStagingVerificationBuild } from "@/lib/staging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // The current Vercel Hobby project caps a single function response at 300 seconds.
 export const maxDuration = 300;
 
-function errorResponse(message: string, status: number, additionalHeaders?: HeadersInit) {
+function errorResponse(
+  message: string,
+  status: number,
+  additionalHeaders?: HeadersInit,
+  additionalBody?: Record<string, unknown>,
+) {
   return NextResponse.json(
-    { error: message },
+    { error: message, ...additionalBody },
     {
       status,
       headers: {
@@ -68,13 +75,22 @@ async function streamAuthorizedFile(request: NextRequest) {
   if (!product || !isProductDeliveryReady(product) || !product.googleDriveFileId) {
     return errorResponse("The purchased file is not configured for secure delivery.", 503);
   }
+  const driveFileId = product.googleDriveFileId;
 
   let size: number;
   try {
-    size = await getGoogleDriveFileSize(product.googleDriveFileId);
+    size = await getGoogleDriveFileSize(driveFileId);
   } catch (error) {
     console.error("Google Drive file metadata could not be opened:", error instanceof Error ? error.name : "unknown error");
-    return errorResponse("The file could not be prepared for delivery. Please try again before the authorization expires.", 502);
+    const diagnostic = isStagingVerificationBuild()
+      ? { driveAccessDiagnostic: getSanitizedGoogleDriveFailure(error, driveFileId) }
+      : undefined;
+    return errorResponse(
+      "The file could not be prepared for delivery. Please try again before the authorization expires.",
+      502,
+      undefined,
+      diagnostic,
+    );
   }
 
   const parsedRange = parseByteRange(request.headers.get("range"), size);
@@ -105,7 +121,7 @@ async function streamAuthorizedFile(request: NextRequest) {
     : undefined;
   let media;
   try {
-    media = await openGoogleDriveMediaStream(product.googleDriveFileId, rangeHeader);
+    media = await openGoogleDriveMediaStream(driveFileId, rangeHeader);
     if (rangeHeader && media.status !== 206) {
       media.stream.destroy();
       throw new Error("Google Drive did not honor the requested byte range.");
@@ -113,7 +129,15 @@ async function streamAuthorizedFile(request: NextRequest) {
   } catch (error) {
     console.error("Google Drive stream could not be opened:", error instanceof Error ? error.name : "unknown error");
     await releaseDownloadTicket(ticketHash, claim.leaseId, rangeStart).catch(() => undefined);
-    return errorResponse("The file could not be opened for delivery. Please try again before the authorization expires.", 502);
+    const diagnostic = isStagingVerificationBuild()
+      ? { driveAccessDiagnostic: getSanitizedGoogleDriveFailure(error, driveFileId) }
+      : undefined;
+    return errorResponse(
+      "The file could not be opened for delivery. Please try again before the authorization expires.",
+      502,
+      undefined,
+      diagnostic,
+    );
   }
 
   const isRange = parsedRange.kind === "range";
@@ -160,12 +184,17 @@ async function streamAuthorizedFile(request: NextRequest) {
         }
         bytesSent += result.value.byteLength;
         controller.enqueue(result.value);
-      } catch {
+      } catch (error) {
         if (!finalized) {
           finalized = true;
           await releaseAtCurrentOffset();
         }
-        controller.error(new Error("The file stream ended unexpectedly."));
+        if (isStagingVerificationBuild()) {
+          const driveAccessDiagnostic = getSanitizedGoogleDriveFailure(error, driveFileId);
+          controller.error(new Error(JSON.stringify({ driveAccessDiagnostic })));
+        } else {
+          controller.error(new Error("The file stream ended unexpectedly."));
+        }
       }
     },
     async cancel(reason) {

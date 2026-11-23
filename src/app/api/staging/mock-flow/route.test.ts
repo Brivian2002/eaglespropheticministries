@@ -146,4 +146,29 @@ describe("GET /api/staging/mock-flow", () => {
     expect(JSON.stringify(body)).not.toContain("test_access_token");
     expect(mocks.issueDownloadTicket).not.toHaveBeenCalled();
   });
+
+  it("propagates a sanitized media-stream denial and does not retry or replay a failed read", async () => {
+    const diagnostic = {
+      serviceAccountEmail: "staging-reader@example.iam.gserviceaccount.com",
+      httpStatus: 403,
+      apiStatus: "PERMISSION_DENIED",
+      message: "Permission denied for [redacted file ID].",
+    };
+    mocks.streamDownload.mockReset();
+    mocks.streamDownload.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "The file could not be opened.", driveAccessDiagnostic: diagnostic }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const response = await GET(request());
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.driveAccessDiagnostic).toEqual(diagnostic);
+    expect(body.privateDriveRead).toBe(false);
+    expect(body.replayBlocked).toBe(false);
+    expect(mocks.streamDownload).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteStagingTestTicket).toHaveBeenCalledTimes(1);
+  });
 });

@@ -6,6 +6,10 @@ import {
   getDownloadTicketState,
   issueDownloadTicket,
 } from "@/lib/download-ticket-store";
+import {
+  getSanitizedGoogleDriveFailure,
+  type GoogleDriveFailureDiagnostic,
+} from "@/lib/google-drive-diagnostics";
 import { hashDownloadToken } from "@/lib/download-token";
 import { getGoogleDriveFileSize } from "@/lib/google-drive";
 import { getActiveProducts, getProductById, isProductDeliveryReady } from "@/lib/product-config";
@@ -28,31 +32,27 @@ function response(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+function asDriveDiagnostic(value: unknown): GoogleDriveFailureDiagnostic | null {
+  if (!value || typeof value !== "object") return null;
+  const diagnostic = (value as { driveAccessDiagnostic?: unknown }).driveAccessDiagnostic;
+  if (!diagnostic || typeof diagnostic !== "object") return null;
+  const candidate = diagnostic as Partial<GoogleDriveFailureDiagnostic>;
+  if (
+    !(typeof candidate.serviceAccountEmail === "string" || candidate.serviceAccountEmail === null) ||
+    !(typeof candidate.httpStatus === "number" || candidate.httpStatus === null) ||
+    !(typeof candidate.apiStatus === "string" || candidate.apiStatus === null) ||
+    typeof candidate.message !== "string"
+  ) return null;
+  return candidate as GoogleDriveFailureDiagnostic;
 }
 
-function getSanitizedDriveFailure(error: unknown, fileId: string) {
-  const root = asRecord(error);
-  const apiResponse = asRecord(root?.response);
-  const payload = asRecord(apiResponse?.data);
-  const apiError = asRecord(payload?.error);
-  const candidateStatus = apiResponse?.status ?? apiError?.code;
-  const httpStatus =
-    typeof candidateStatus === "number" && Number.isInteger(candidateStatus) && candidateStatus >= 100 && candidateStatus <= 599
-      ? candidateStatus
-      : null;
-  const apiStatus = typeof apiError?.status === "string" ? apiError.status.slice(0, 64) : null;
-  const providerMessage = typeof apiError?.message === "string" ? apiError.message : "Google Drive metadata request failed.";
-  const message = providerMessage
-    .replaceAll(fileId, "[redacted file ID]")
-    .replace(/-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/g, "[redacted credential]")
-    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
-    .replace(/\bya29\.[A-Za-z0-9._-]+/g, "[redacted credential]")
-    .replace(/([?&](?:access_token|token|key)=)[^&\s]*/gi, "$1[redacted]")
-    .slice(0, 500);
-
-  return { httpStatus, apiStatus, message };
+function asDriveDiagnosticFromStreamError(error: unknown): GoogleDriveFailureDiagnostic | null {
+  if (!(error instanceof Error)) return null;
+  try {
+    return asDriveDiagnostic(JSON.parse(error.message));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -118,10 +118,7 @@ export async function GET(request: NextRequest) {
     try {
       size = await getGoogleDriveFileSize(product.googleDriveFileId);
     } catch (error) {
-      driveAccessDiagnostic = {
-        serviceAccountEmail: process.env.GOOGLE_CLIENT_EMAIL || null,
-        ...getSanitizedDriveFailure(error, product.googleDriveFileId),
-      };
+      driveAccessDiagnostic = getSanitizedGoogleDriveFailure(error, product.googleDriveFileId);
       throw error;
     }
     const issued = await issueDownloadTicket(reference, product.id, 10 * 60, size - 1);
@@ -136,11 +133,22 @@ export async function GET(request: NextRequest) {
       },
     });
     const streamResponse = await streamDownload(streamRequest);
-    const streamedBytes = await streamResponse.arrayBuffer();
+    if (streamResponse.status >= 400) {
+      const errorBody = await streamResponse.clone().json().catch(() => null);
+      driveAccessDiagnostic = asDriveDiagnostic(errorBody) ?? driveAccessDiagnostic;
+    }
+    let streamedBytes = new ArrayBuffer(0);
+    try {
+      streamedBytes = await streamResponse.arrayBuffer();
+    } catch (error) {
+      driveAccessDiagnostic = asDriveDiagnosticFromStreamError(error) ?? driveAccessDiagnostic;
+    }
     privateDriveRead = streamResponse.status === 206 && streamedBytes.byteLength === 1;
     ticketConsumed = (await getDownloadTicketState(hashDownloadToken(issued.token))) === "consumed";
-    const replayResponse = await streamDownload(streamRequest);
-    replayBlocked = replayResponse.status === 410;
+    if (privateDriveRead && ticketConsumed) {
+      const replayResponse = await streamDownload(streamRequest);
+      replayBlocked = replayResponse.status === 410;
+    }
   } catch {
     // Keep internal IDs, credentials, Drive metadata, and provider errors out of the response.
   } finally {
