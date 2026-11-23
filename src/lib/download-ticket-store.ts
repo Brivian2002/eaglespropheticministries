@@ -23,6 +23,9 @@ function getSql(): SqlClient {
       idle_timeout: 10,
       connect_timeout: 10,
       prepare: false,
+      ...(process.env.DATABASE_PASSWORD
+        ? { password: process.env.DATABASE_PASSWORD, ssl: "require" as const }
+        : {}),
     });
   }
   return globals.__epmTicketSql;
