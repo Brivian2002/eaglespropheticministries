@@ -36,6 +36,7 @@ export async function generateMetadata({
     title: `${post.title} — Eagles Prophetic Ministries`,
     description,
     authors: [{ name: post.author || "Eagles Prophetic Ministries" }],
+    alternates: { canonical: `${BASE_URL}/teachings/${post.slug}` },
     openGraph: {
       title: post.title,
       description,

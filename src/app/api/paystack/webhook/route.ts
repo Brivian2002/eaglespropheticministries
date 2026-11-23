@@ -1,55 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-/**
- * Paystack Webhook Handler
- *
- * Logs successful payments. The actual download flow is now:
- * Paystack redirects customer to site → frontend calls /api/download/verify
- * → verifies with Paystack API → issues signed token → auto-download.
- *
- * No database needed. No token created here.
- */
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.text();
-    const signature = request.headers.get("x-paystack-signature");
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-
-    if (!secretKey) {
-      console.warn("Paystack webhook: PAYSTACK_SECRET_KEY not configured.");
-      return NextResponse.json({ received: true }, { status: 200 });
-    }
-
-    // Verify HMAC-SHA512 signature
-    const crypto = await import("crypto");
-    const hash = crypto.createHmac("sha512", secretKey).update(body).digest("hex");
-    if (hash !== signature) {
-      console.error("Paystack webhook: invalid signature.");
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-    }
-
-    const event = JSON.parse(body);
-
-    if (event.event === "charge.success") {
-      const { reference, amount, customer, metadata } = event.data;
-      const email = customer?.email;
-      const customFields = metadata?.custom_fields || [];
-      const getField = (name: string) =>
-        customFields.find((f: { variable_name: string }) => f.variable_name === name)?.value;
-
-      console.log(
-        "✅ Payment Successful! Ref: " + reference +
-        " Amount: " + (amount / 100).toFixed(2) + " GHS" +
-        " Customer: " + email +
-        " Product: " + (getField("product_title") || "N/A") +
-        " Type: " + (getField("payment_type") || "book")
-      );
-    }
-
-    return NextResponse.json({ received: true });
-  } catch (error) {
-    console.error("Paystack webhook error:", error);
-    return NextResponse.json({ received: true }, { status: 200 });
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) {
+    return NextResponse.json({ error: "Webhook verification is not configured." }, { status: 503 });
   }
+
+  const rawBody = await request.text();
+  const signature = request.headers.get("x-paystack-signature") || "";
+  const expected = createHmac("sha512", secretKey).update(rawBody).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, "hex");
+  } catch {
+    return NextResponse.json({ error: "Invalid signature." }, { status: 401 });
+  }
+  if (supplied.length !== expected.length || !timingSafeEqual(expected, supplied)) {
+    return NextResponse.json({ error: "Invalid signature." }, { status: 401 });
+  }
+
+  let event: { event?: unknown; data?: { reference?: unknown } };
+  try {
+    event = JSON.parse(rawBody) as typeof event;
+  } catch {
+    return NextResponse.json({ error: "Invalid webhook payload." }, { status: 400 });
+  }
+
+  if (event.event === "charge.success") {
+    const reference = typeof event.data?.reference === "string" ? event.data.reference : "unknown";
+    console.info("Verified Paystack success notification received:", reference);
+  }
+
+  // Download fulfillment remains in the verify endpoint, which checks Paystack's API.
+  return NextResponse.json({ received: true });
 }

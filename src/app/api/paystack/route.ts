@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProductById } from "@/lib/product-config";
+import { ensureDownloadTicketSchema } from "@/lib/download-ticket-store";
 
-/**
- * Paystack Payment Initialization
- *
- * Initializes a Paystack transaction. Product data comes from
- * product-config.ts — no database needed.
- *
- * For book purchases, includes a callback_url so Paystack
- * redirects back to the site after payment.
- * Paystack appends ?trxref=REFERENCE to the callback_url.
- */
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 interface PaystackInitPayload {
-  email: string;
+  email?: string;
   amount?: number;
   fullName?: string;
   productId?: string;
@@ -22,108 +15,125 @@ interface PaystackInitPayload {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: PaystackInitPayload = await request.json();
-
-    if (!body.email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
-      return NextResponse.json(
-        { error: "A valid email address is required" },
-        { status: 400 }
-      );
+    const body = (await request.json()) as PaystackInitPayload;
+    const email = body.email?.trim();
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return NextResponse.json({ error: "A valid email address is required." }, { status: 400 });
     }
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
       return NextResponse.json(
-        { error: "Payment gateway not configured. Please contact the ministry directly." },
-        { status: 503 }
+        { error: "Payment gateway is not configured for this deployment." },
+        { status: 503 },
       );
     }
 
-    // Resolve product and amount
+    const paymentType = body.type ?? (body.productId ? "book" : "donation");
     let productTitle = "Donation";
     let amount = body.amount;
-    let currency = "GHS";
-    let productId = body.productId || "";
+    let productId = "";
 
-    if (body.productId) {
+    if (paymentType === "book") {
+      if (!body.productId) {
+        return NextResponse.json({ error: "Choose a bookstore item." }, { status: 400 });
+      }
       const product = getProductById(body.productId);
-      if (!product || !product.isActive) {
+      if (!product) {
+        return NextResponse.json({ error: "Product not found or unavailable." }, { status: 404 });
+      }
+      if (!product.googleDriveFileId) {
         return NextResponse.json(
-          { error: "Product not found or unavailable." },
-          { status: 404 }
+          { error: "This bookstore item is not configured for secure delivery yet." },
+          { status: 503 },
+        );
+      }
+      try {
+        await ensureDownloadTicketSchema();
+      } catch {
+        return NextResponse.json(
+          { error: "Secure fulfillment is not ready, so no payment was started." },
+          { status: 503 },
         );
       }
       productTitle = product.title;
       amount = product.price;
-      currency = product.currency;
+      productId = product.id;
+    } else if (paymentType === "donation") {
+      if (body.productId) {
+        return NextResponse.json({ error: "Donations cannot include a bookstore product." }, { status: 400 });
+      }
+    } else {
+      return NextResponse.json({ error: "Unsupported payment type." }, { status: 400 });
     }
 
-    if (!amount || amount < 100) {
-      return NextResponse.json(
-        { error: "Amount must be at least GHS 1.00" },
-        { status: 400 }
-      );
+    if (!Number.isInteger(amount) || !amount || amount < 100) {
+      return NextResponse.json({ error: "Amount must be at least GHS 1.00." }, { status: 400 });
     }
 
-    // Build Paystack custom fields
+    const currency = "GHS";
     const customFields: { display_name: string; variable_name: string; value: string }[] = [];
-    if (body.fullName) {
-      customFields.push({ display_name: "Full Name", variable_name: "full_name", value: body.fullName });
+    if (body.fullName?.trim()) {
+      customFields.push({
+        display_name: "Full Name",
+        variable_name: "full_name",
+        value: body.fullName.trim().slice(0, 100),
+      });
     }
     if (productId) {
       customFields.push({ display_name: "Product ID", variable_name: "product_id", value: productId });
+      customFields.push({ display_name: "Product", variable_name: "product_title", value: productTitle });
     }
-    customFields.push({ display_name: "Product", variable_name: "product_title", value: productTitle });
-    customFields.push({ display_name: "Payment Type", variable_name: "payment_type", value: body.type || "book" });
+    customFields.push({ display_name: "Payment Type", variable_name: "payment_type", value: paymentType });
 
-    // For book purchases, redirect back to site after payment
-    // Paystack will append ?trxref=REFERENCE to this URL
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "";
-    const callbackUrl = body.type === "book" && baseUrl ? baseUrl + "/" : undefined;
-
-    // Call Paystack
+    const callbackBase = process.env.VERCEL_ENV === "production"
+      ? "https://eaglespropheticministries.vercel.app"
+      : request.nextUrl.origin;
     const paystackBody: Record<string, unknown> = {
-      email: body.email,
+      email,
       amount,
       currency,
-      metadata: { custom_fields: customFields },
+      metadata: {
+        payment_type: paymentType,
+        product_id: productId || undefined,
+        product_title: productTitle,
+        custom_fields: customFields,
+      },
     };
+    if (paymentType === "book") paystackBody.callback_url = `${callbackBase}/bookstore`;
 
-    if (callbackUrl) {
-      paystackBody.callback_url = callbackUrl;
-    }
-
-    const paystackRes = await fetch("https://api.paystack.co/transaction/initialize", {
+    const paystackResponse = await fetch("https://api.paystack.co/transaction/initialize", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${secretKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(paystackBody),
+      cache: "no-store",
     });
 
-    if (!paystackRes.ok) {
-      const errText = await paystackRes.text();
-      console.error("Paystack API error:", errText);
+    const payload = await paystackResponse.json().catch(() => null);
+    const authorizationUrl = payload?.data?.authorization_url;
+    const reference = payload?.data?.reference;
+    if (
+      !paystackResponse.ok ||
+      payload?.status !== true ||
+      typeof authorizationUrl !== "string" ||
+      typeof reference !== "string"
+    ) {
+      console.error("Paystack initialization was rejected:", paystackResponse.status);
       return NextResponse.json(
-        { error: "Failed to initialize payment. Please try again." },
-        { status: 502 }
+        { error: "Payment could not be initialized. Please try again." },
+        { status: 502 },
       );
     }
 
-    const data = await paystackRes.json();
-
-    return NextResponse.json({
-      success: true,
-      authorization_url: data.data.authorization_url,
-      reference: data.data.reference,
-      access_code: data.data.access_code,
-    });
+    return NextResponse.json({ success: true, authorization_url: authorizationUrl, reference });
   } catch (error) {
-    console.error("Paystack init error:", error);
+    console.error("Paystack initialization failed:", error instanceof Error ? error.name : "unknown error");
     return NextResponse.json(
       { error: "An unexpected error occurred. Please try again." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

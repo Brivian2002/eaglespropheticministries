@@ -1,65 +1,78 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createDownloadToken } from "@/lib/download-token";
 import { getActiveProducts } from "@/lib/product-config";
+import { issueDownloadTicket } from "@/lib/download-ticket-store";
+import { verifyPaystackProductPurchase } from "@/lib/paystack-verification";
 
-/**
- * Download Verify API
- *
- * Called by the frontend after Paystack redirects back with ?reference=xxx
- *
- * SIMPLIFIED: Does NOT call Paystack API (no secret key needed).
- * If Paystack redirected the user back with a reference, the payment succeeded.
- * We just create a signed download token and return it.
- *
- * No database needed. No Paystack secret key needed.
- */
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function noStoreHeaders() {
+  return {
+    "Cache-Control": "no-store, private, max-age=0",
+    "X-Robots-Tag": "noindex, nofollow, noarchive",
+  };
+}
+
 export async function GET(request: NextRequest) {
+  const reference = request.nextUrl.searchParams.get("reference")?.trim();
+  if (!reference || reference.length > 128 || !/^[A-Za-z0-9_-]+$/.test(reference)) {
+    return NextResponse.json(
+      { error: "A valid payment reference is required." },
+      { status: 400, headers: noStoreHeaders() },
+    );
+  }
+
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) {
+    return NextResponse.json(
+      { error: "Secure payment verification is temporarily unavailable." },
+      { status: 503, headers: noStoreHeaders() },
+    );
+  }
+
   try {
-    const { searchParams } = new URL(request.url);
-    const reference = searchParams.get("reference")?.trim();
-
-    if (!reference) {
-      return NextResponse.json(
-        { error: "Missing payment reference." },
-        { status: 400 }
-      );
-    }
-
-    // Find the product (contains the Google Drive file ID)
-    const products = getActiveProducts();
-    const product = products[0];
+    const product = await verifyPaystackProductPurchase(
+      reference,
+      secretKey,
+      getActiveProducts(),
+    );
 
     if (!product) {
       return NextResponse.json(
-        { error: "No products configured. Please contact the ministry." },
-        { status: 503 }
+        { error: "Payment could not be confirmed for this bookstore item. No download was issued." },
+        { status: 402, headers: noStoreHeaders() },
       );
     }
 
-    // Create a signed download token — file ID is embedded in the token,
-    // NEVER exposed to the client.
-    const token = createDownloadToken({
-      reference,
-      productTitle: product.title,
-      fileId: product.googleDriveFileId,
-      fileName: product.fileName,
-      hours: 48,
-    });
+    if (!product.googleDriveFileId) {
+      return NextResponse.json(
+        { error: "The purchased file is not configured for secure delivery. Please contact the ministry." },
+        { status: 503, headers: noStoreHeaders() },
+      );
+    }
 
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const issued = await issueDownloadTicket(reference, product.id);
+    if (!issued) {
+      return NextResponse.json(
+        { error: "This payment's download authorization is already in use or has been fulfilled." },
+        { status: 409, headers: noStoreHeaders() },
+      );
+    }
 
-    return NextResponse.json({
-      success: true,
-      token,
-      downloadUrl: `/api/download/stream?token=${token}`,
-      productTitle: product.title,
-      expiresAt: expiresAt.toISOString(),
-    });
-  } catch (error) {
-    console.error("Download verify error:", error);
     return NextResponse.json(
-      { error: "Failed to prepare download. Please try again." },
-      { status: 500 }
+      {
+        success: true,
+        ticket: issued.token,
+        productTitle: product.title,
+        expiresAt: issued.expiresAt,
+      },
+      { headers: noStoreHeaders() },
+    );
+  } catch (error) {
+    console.error("Secure download verification failed:", error instanceof Error ? error.name : "unknown error");
+    return NextResponse.json(
+      { error: "Secure download preparation is temporarily unavailable. Please contact the ministry." },
+      { status: 503, headers: noStoreHeaders() },
     );
   }
 }

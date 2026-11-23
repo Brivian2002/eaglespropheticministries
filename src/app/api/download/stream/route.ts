@@ -1,95 +1,124 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyDownloadToken } from "@/lib/download-token";
+import { Readable } from "node:stream";
+import { getProductById } from "@/lib/product-config";
+import { claimDownloadTicket, markDownloadTicketConsumed, releaseDownloadTicket } from "@/lib/download-ticket-store";
+import { hashDownloadToken, isValidDownloadToken } from "@/lib/download-token";
+import { openGoogleDriveMediaStream } from "@/lib/google-drive";
 
-/**
- * Download Stream API
- *
- * Verifies a signed token and proxies the file from Google Drive
- * using the PUBLIC download URL. No Service Account needed.
- *
- * The Google Drive File ID is NEVER exposed to the client —
- * it lives inside the signed token only.
- */
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+// The current Vercel project is on Hobby; its per-function cap is 300 seconds.
+export const maxDuration = 300;
 
-export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const token = searchParams.get("token")?.trim();
-
-    if (!token) {
-      return NextResponse.json(
-        { error: "Missing download token." },
-        { status: 400 }
-      );
-    }
-
-    const payload = verifyDownloadToken(token);
-
-    if (!payload) {
-      return NextResponse.json(
-        {
-          error:
-            "This download link is invalid or has expired. Please contact the ministry at eaglespropheticministries@gmail.com.",
-        },
-        { status: 403 }
-      );
-    }
-
-    const fileId = payload.fileId;
-    if (!fileId) {
-      return NextResponse.json(
-        { error: "File not available. Please contact the ministry." },
-        { status: 503 }
-      );
-    }
-
-    const fileName = payload.fileName || "THE_ENDTIMES_PROPHETIC_GUIDE.pdf";
-
-    console.log(`\u2705 Downloading: ${fileName} (ref: ${payload.reference})`);
-
-    // Fetch from Google Drive public download URL (no Service Account needed)
-    const driveUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${fileId}`;
-    const driveResponse = await fetch(driveUrl, {
-      redirect: "follow",
+function errorResponse(message: string, status: number) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status,
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "Cache-Control": "no-store, private, max-age=0",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
       },
-    });
+    },
+  );
+}
 
-    if (!driveResponse.ok) {
-      console.error(`Google Drive returned ${driveResponse.status}`);
-      return NextResponse.json(
-        { error: "Could not fetch the file. Please try again or contact the ministry." },
-        { status: 502 }
-      );
-    }
+function encodeFileName(fileName: string): string {
+  return encodeURIComponent(fileName).replace(/['()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
 
-    const contentType =
-      driveResponse.headers.get("content-type") || "application/pdf";
-    const contentLength = driveResponse.headers.get("content-length");
-
-    const headers = new Headers();
-    headers.set("Content-Type", contentType);
-    headers.set(
-      "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(fileName)}"`
-    );
-    if (contentLength) {
-      headers.set("Content-Length", contentLength);
-    }
-    headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
-
-    // Stream the response body directly to the client
-    return new NextResponse(driveResponse.body, {
-      status: 200,
-      headers,
-    });
-  } catch (error) {
-    console.error("Download stream error:", error);
-    return NextResponse.json(
-      { error: "An error occurred during download. Please try again or contact the ministry." },
-      { status: 500 }
-    );
+export async function POST(request: NextRequest) {
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return errorResponse("A valid download authorization is required.", 400);
   }
+  const rawTicket = form.get("ticket");
+  const ticket = typeof rawTicket === "string" ? rawTicket : "";
+  if (!isValidDownloadToken(ticket)) {
+    return errorResponse("A valid download authorization is required.", 400);
+  }
+
+  const ticketHash = hashDownloadToken(ticket);
+  let claim: { productId: string } | null;
+  try {
+    claim = await claimDownloadTicket(ticketHash);
+  } catch {
+    return errorResponse("Secure download authorization is temporarily unavailable.", 503);
+  }
+  if (!claim) {
+    return errorResponse("This download authorization has expired, is already in use, or has been fulfilled.", 410);
+  }
+
+  const product = getProductById(claim.productId);
+  if (!product?.googleDriveFileId) {
+    await releaseDownloadTicket(ticketHash).catch(() => undefined);
+    return errorResponse("The purchased file is not configured for secure delivery.", 503);
+  }
+
+  let media;
+  try {
+    media = await openGoogleDriveMediaStream(product.googleDriveFileId);
+  } catch (error) {
+    console.error("Google Drive stream could not be opened:", error instanceof Error ? error.name : "unknown error");
+    await releaseDownloadTicket(ticketHash).catch(() => undefined);
+    return errorResponse("The file could not be opened for delivery. Please try again before the authorization expires.", 502);
+  }
+
+  const source = Readable.toWeb(media.stream) as ReadableStream<Uint8Array>;
+  const reader = source.getReader();
+  let finalized = false;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          finalized = true;
+          try {
+            await markDownloadTicketConsumed(ticketHash);
+          } catch {
+            console.error("Download ticket completion could not be persisted.");
+          }
+          controller.close();
+          return;
+        }
+        controller.enqueue(result.value);
+      } catch {
+        if (!finalized) {
+          finalized = true;
+          await releaseDownloadTicket(ticketHash).catch(() => undefined);
+        }
+        controller.error(new Error("The file stream ended unexpectedly."));
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        if (!finalized) {
+          finalized = true;
+          await releaseDownloadTicket(ticketHash).catch(() => undefined);
+        }
+      }
+    },
+  });
+
+  const contentType = product.fileName.toLowerCase().endsWith(".apk")
+    ? "application/vnd.android.package-archive"
+    : "application/pdf";
+  const headers = new Headers({
+    "Content-Type": contentType,
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeFileName(product.fileName)}`,
+    "Cache-Control": "no-store, private, max-age=0",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex, nofollow, noarchive",
+  });
+  if (media.contentLength && /^\d+$/.test(media.contentLength)) {
+    headers.set("Content-Length", media.contentLength);
+  }
+
+  return new NextResponse(body, { status: 200, headers });
 }

@@ -4,64 +4,52 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ClientShell } from "@/components/client-shell";
+import { SITE_URL } from "@/lib/seo";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-const playfair = Playfair_Display({
-  variable: "--font-playfair",
-  subsets: ["latin"],
-  display: "swap",
-});
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+const playfair = Playfair_Display({ variable: "--font-playfair", subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "Eagles Prophetic Ministries — Prophet Gabriel Christ Alorgo",
   description:
-    "Official page of Prophet Gabriel Christ Alorgo, Founder and Lead Shepherd of Eagles Prophetic Ministries. Preparing the Church for the Second Coming of the Lord Jesus Christ.",
+    "Official website of Prophet Gabriel Christ Alorgo and Eagles Prophetic Ministries in Ghana. Explore Bible teachings, ministry media, events, and books preparing the Church for the Second Coming of Jesus Christ.",
   keywords: [
     "Prophet Gabriel Christ Alorgo",
     "Eagles Prophetic Ministries",
-    "Prophetic Ministry",
-    "Endtime Ministry",
-    "Ghana Prophet",
-    "Second Coming",
-    "Bible Teachings",
+    "Ghana prophetic ministry",
+    "Bible teachings",
+    "end-times Bible teaching",
+    "Second Coming of Jesus Christ",
   ],
   authors: [{ name: "Eagles Prophetic Ministries" }],
-  icons: {
-    icon: "/images/Ministrylogo.jpg",
-  },
+  robots: { index: true, follow: true },
+  icons: { icon: "/images/Ministrylogo.jpg" },
   openGraph: {
     title: "Eagles Prophetic Ministries",
-    description:
-      "Prophet Gabriel Christ Alorgo — Preparing the Church for the Second Coming of the Lord Jesus Christ.",
+    description: "Bible teaching, ministry resources, events, and media from Prophet Gabriel Christ Alorgo in Ghana.",
+    siteName: "Eagles Prophetic Ministries",
+    locale: "en_GH",
     type: "website",
+    images: [{ url: "/images/Ministrylogo.jpg", alt: "Eagles Prophetic Ministries" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Eagles Prophetic Ministries",
+    description: "Bible teaching, ministry resources, events, and media from Prophet Gabriel Christ Alorgo in Ghana.",
+    images: ["/images/Ministrylogo.jpg"],
   },
   verification: {
     google: "rFXCJfN2PKInkfgkJx2gD9GTfN27-evXzaTyxQG2zGk",
   },
-  other: {
-    "google-adsense-account": "ca-pub-7744791430316817",
-  },
+  other: { "google-adsense-account": "ca-pub-7744791430316817" },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} ${playfair.variable} antialiased bg-background text-foreground`}
-      >
+    <html lang="en-GH" suppressHydrationWarning>
+      <body className={`${geistSans.variable} ${geistMono.variable} ${playfair.variable} antialiased bg-background text-foreground`}>
         <ThemeProvider>
           <ClientShell>{children}</ClientShell>
           <Toaster />
