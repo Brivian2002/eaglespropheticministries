@@ -69,7 +69,7 @@ const FALLBACK_PRODUCTS: Product[] = [
     coverImage: "/images/EPMBook.jpg",
     category: "android-app-bundle",
     contents: ["Android app", "Complete book PDF inside the app", "Audiobook inside the app"],
-    fulfillmentNote: "Customer release pending: the current APK is debug-signed for review and is not available for purchase. Approximately 1.06 GB.",
+    fulfillmentNote: "Signed release v1.0.1 (versionCode 2), approximately 1.06 GB.",
     releaseReady: false,
     purchasable: false,
   },

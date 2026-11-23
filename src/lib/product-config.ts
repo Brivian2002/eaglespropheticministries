@@ -52,8 +52,7 @@ const PRODUCTS: ProductConfig[] = [
     googleDriveFileId: process.env.EPM_ANDROID_APP_FILE_ID,
     fileName: "EaglesPropheticMinistries-review.apk",
     contents: ["Android app", "Complete book PDF inside the app", "Audiobook inside the app"],
-    fulfillmentNote:
-      "Customer release pending: the current APK is debug-signed for review and is not available for purchase. Approximately 1.06 GB.",
+    fulfillmentNote: "Signed release v1.0.1 (versionCode 2), approximately 1.06 GB.",
   },
 ];
 
